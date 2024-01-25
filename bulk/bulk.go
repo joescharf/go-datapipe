@@ -42,12 +42,13 @@ func (r *Bulk) Append(rows *sql.Rows) (err error) {
 	r.rowPos++
 	r.totalRowCount++
 
-	// error here if maxRowTxCommit is 1
-	if r.totalRowCount > 0 && r.totalRowCount%r.maxRowTxCommit == 0 {
-		if err = r.tx.Commit(); err != nil {
-			return errors.Trace(err)
+	if r.tx != nil {
+		if r.totalRowCount > 0 && r.totalRowCount%r.maxRowTxCommit == 0 {
+			if err = r.tx.Commit(); err != nil {
+				return errors.Trace(err)
+			}
+			r.tx = nil
 		}
-		r.tx = nil
 	}
 
 	//Insert rows if buffer is full
