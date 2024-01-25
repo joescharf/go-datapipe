@@ -3,7 +3,6 @@ package bulk
 import (
 	"bytes"
 	"database/sql"
-	"strconv"
 
 	"github.com/juju/errors"
 )
@@ -30,9 +29,9 @@ type Bulk struct {
 	totalRowCount int //Total number of rows
 }
 
-//Appends row values to internal buffer
+// Appends row values to internal buffer
 func (r *Bulk) Append(rows *sql.Rows) (err error) {
-	rows.Scan(r.valuePtrs)
+	rows.Scan(r.valuePtrs...)
 
 	//Copy row values into buffer
 	for i := 0; i < r.colCount; i++ {
@@ -43,6 +42,7 @@ func (r *Bulk) Append(rows *sql.Rows) (err error) {
 	r.rowPos++
 	r.totalRowCount++
 
+	// error here if maxRowTxCommit is 1
 	if r.totalRowCount > 0 && r.totalRowCount%r.maxRowTxCommit == 0 {
 		if err = r.tx.Commit(); err != nil {
 			return errors.Trace(err)
@@ -69,7 +69,7 @@ func (r *Bulk) Append(rows *sql.Rows) (err error) {
 	return nil
 }
 
-//Closes any prepared statements
+// Closes any prepared statements
 func (r *Bulk) Close() (err error) {
 	if r.stmt != nil {
 		r.stmt.Close()
@@ -78,7 +78,7 @@ func (r *Bulk) Close() (err error) {
 	return nil
 }
 
-//Writes any unsaved values from buffer to database
+// Writes any unsaved values from buffer to database
 func (r *Bulk) Flush() (totalRowCount int, err error) {
 	if r.bufPos > 0 {
 		buf := make([]interface{}, r.bufPos)
@@ -110,14 +110,14 @@ func (r *Bulk) Flush() (totalRowCount int, err error) {
 	return r.totalRowCount, nil
 }
 
-//Creates a bulk insert SQL prepared statement based on a number of rows
-//Uses $x for row position
+// Creates a bulk insert SQL prepared statement based on a number of rows
+// Uses $x for row position
 func (r *Bulk) prepare(rowCount int) (stmt *sql.Stmt, err error) {
 	var buf bytes.Buffer
 
 	buf.WriteString("INSERT INTO ")
-	buf.WriteString(r.schema)
-	buf.WriteString(".")
+	// buf.WriteString(r.schema)
+	// buf.WriteString(".")
 	buf.WriteString(r.tableName)
 	buf.WriteString(" (")
 	for i := 0; i < r.colCount; i++ {
@@ -139,8 +139,8 @@ func (r *Bulk) prepare(rowCount int) (stmt *sql.Stmt, err error) {
 			if j > 0 {
 				buf.WriteString(",")
 			}
-			buf.WriteString("$")
-			buf.WriteString(strconv.Itoa(pos))
+			buf.WriteString("?")
+			// buf.WriteString(strconv.Itoa(pos))
 			pos++
 		}
 		buf.WriteString(")")

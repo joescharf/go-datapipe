@@ -1,4 +1,4 @@
-package main
+package godatapipe
 
 import (
 	"database/sql"
@@ -8,11 +8,11 @@ import (
 	"time"
 
 	_ "github.com/denisenkom/go-mssqldb"
+	"github.com/joescharf/go-datapipe/bulk"
 	_ "github.com/lib/pq"
+	"github.com/xo/dburl"
 
 	"github.com/juju/errors"
-
-	"github.com/literatesnow/go-datapipe/bulk"
 )
 
 type Config struct {
@@ -102,22 +102,25 @@ func (c *Config) EnvInt(envName string, defaultValue int) (dst int, err error) {
 
 func Run(cfg *Config) (err error) {
 	var srcDb, dstDb *sql.DB
+	srcDBurl, err := dburl.Parse(cfg.SrcDbUri)
 
-	if srcDb, err = sql.Open(cfg.SrcDbDriver, cfg.SrcDbUri); err != nil {
+	dstDBurl, err := dburl.Parse(cfg.DstDbUri)
+
+	if srcDb, err = sql.Open(srcDBurl.Driver, srcDBurl.DSN); err != nil {
 		return errors.Trace(err)
 	}
 
 	defer srcDb.Close()
 
-	if dstDb, err = sql.Open(cfg.DstDbDriver, cfg.DstDbUri); err != nil {
+	if dstDb, err = sql.Open(dstDBurl.Driver, dstDBurl.DSN); err != nil {
 		return errors.Trace(err)
 	}
 
 	defer dstDb.Close()
 
-	if err = clearTable(dstDb, cfg); err != nil {
-		return errors.Trace(err)
-	}
+	// if err = clearTable(dstDb, cfg); err != nil {
+	// 	return errors.Trace(err)
+	// }
 
 	if err = copyTable(srcDb, dstDb, cfg); err != nil {
 		return errors.Trace(err)

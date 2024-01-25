@@ -6,7 +6,7 @@ require (
 	github.com/denisenkom/go-mssqldb v0.12.3
 	github.com/juju/errors v1.0.0
 	github.com/lib/pq v1.10.9
-	github.com/literatesnow/go-datapipe v0.0.0-20170227220018-3e091c96a49e
+	github.com/xo/dburl v0.21.1
 )
 
 require (
