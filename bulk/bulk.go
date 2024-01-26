@@ -2,14 +2,16 @@ package bulk
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/juju/errors"
 )
 
 type Bulk struct {
-	db *sql.DB //Database handle
-	tx *sql.Tx
+	conn *sql.Conn //Database handle
+	tx   *sql.Tx
 
 	schema         string
 	tableName      string
@@ -30,7 +32,7 @@ type Bulk struct {
 }
 
 // Appends row values to internal buffer
-func (r *Bulk) Append(rows *sql.Rows) (err error) {
+func (r *Bulk) Append(ctx context.Context, rows *sql.Rows) (err error) {
 	rows.Scan(r.valuePtrs...)
 
 	//Copy row values into buffer
@@ -42,19 +44,19 @@ func (r *Bulk) Append(rows *sql.Rows) (err error) {
 	r.rowPos++
 	r.totalRowCount++
 
-	if r.tx != nil {
-		if r.totalRowCount > 0 && r.totalRowCount%r.maxRowTxCommit == 0 {
-			if err = r.tx.Commit(); err != nil {
-				return errors.Trace(err)
-			}
-			r.tx = nil
+	// Need to check if tx is nil (caused if totalRowCount > 0 maxRowTxCommit = 1 )
+	if r.tx != nil && r.totalRowCount > 0 && r.totalRowCount%r.maxRowTxCommit == 0 {
+		if err = r.tx.Commit(); err != nil {
+			return errors.Trace(err)
 		}
+		r.tx = nil
 	}
 
 	//Insert rows if buffer is full
 	if r.bufPos >= r.bufSz {
 		if r.tx == nil {
-			if r.tx, err = r.db.Begin(); err != nil {
+			if r.tx, err = r.conn.BeginTx(ctx, nil); err != nil {
+				fmt.Println("Error starting transaction")
 				return errors.Trace(err)
 			}
 		}
@@ -80,14 +82,14 @@ func (r *Bulk) Close() (err error) {
 }
 
 // Writes any unsaved values from buffer to database
-func (r *Bulk) Flush() (totalRowCount int, err error) {
+func (r *Bulk) Flush(ctx context.Context) (totalRowCount int, err error) {
 	if r.bufPos > 0 {
 		buf := make([]interface{}, r.bufPos)
 		for i := 0; i < r.bufPos; i++ {
 			buf[i] = r.buf[i]
 		}
 
-		stmt, err := r.prepare(r.rowPos)
+		stmt, err := r.prepare(ctx, r.rowPos)
 		if err != nil {
 			return 0, errors.Trace(err)
 		}
@@ -113,13 +115,19 @@ func (r *Bulk) Flush() (totalRowCount int, err error) {
 
 // Creates a bulk insert SQL prepared statement based on a number of rows
 // Uses $x for row position
-func (r *Bulk) prepare(rowCount int) (stmt *sql.Stmt, err error) {
+func (r *Bulk) prepare(ctx context.Context, rowCount int) (stmt *sql.Stmt, err error) {
 	var buf bytes.Buffer
 
 	buf.WriteString("INSERT INTO ")
-	// buf.WriteString(r.schema)
-	// buf.WriteString(".")
+	if r.schema != "" {
+		buf.WriteString("`")
+		buf.WriteString(r.schema)
+		buf.WriteString("`")
+		buf.WriteString(".")
+	}
+	buf.WriteString("`")
 	buf.WriteString(r.tableName)
+	buf.WriteString("`")
 	buf.WriteString(" (")
 	for i := 0; i < r.colCount; i++ {
 		if i > 0 {
@@ -140,19 +148,19 @@ func (r *Bulk) prepare(rowCount int) (stmt *sql.Stmt, err error) {
 			if j > 0 {
 				buf.WriteString(",")
 			}
-			buf.WriteString("?")
+			buf.WriteString("?") // Placeholder for Mysql
 			// buf.WriteString(strconv.Itoa(pos))
 			pos++
 		}
 		buf.WriteString(")")
 	}
 
-	return r.db.Prepare(buf.String())
+	return r.conn.PrepareContext(ctx, buf.String())
 }
 
-func NewBulk(db *sql.DB, columns []string, schema string, tableName string, rowCount int, maxRowTxCommit int) (r *Bulk, err error) {
+func NewBulk(ctx context.Context, db *sql.Conn, columns []string, schema string, tableName string, rowCount int, maxRowTxCommit int) (r *Bulk, err error) {
 	r = &Bulk{
-		db:             db,
+		conn:           db,
 		schema:         schema,
 		tableName:      tableName,
 		columns:        columns,
@@ -173,7 +181,7 @@ func NewBulk(db *sql.DB, columns []string, schema string, tableName string, rowC
 
 	r.buf = make([]interface{}, r.bufSz)
 
-	if r.stmt, err = r.prepare(rowCount); err != nil {
+	if r.stmt, err = r.prepare(ctx, rowCount); err != nil {
 		return nil, errors.Trace(err)
 	}
 

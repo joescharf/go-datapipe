@@ -1,6 +1,7 @@
 package bulk
 
 import (
+	"context"
 	"database/sql"
 	"strconv"
 
@@ -9,8 +10,8 @@ import (
 )
 
 type CopyIn struct {
-	db *sql.DB //Database handle
-	tx *sql.Tx
+	conn *sql.Conn //Database handle
+	tx   *sql.Tx
 
 	stmt *sql.Stmt
 
@@ -22,8 +23,8 @@ type CopyIn struct {
 	totalRowCount int //Total number of rows
 }
 
-//Appends row values to internal buffer
-func (r *CopyIn) Append(rows *sql.Rows) (err error) {
+// Appends row values to internal buffer
+func (r *CopyIn) Append(ctx context.Context, rows *sql.Rows) (err error) {
 	rows.Scan(r.valuePtrs...)
 
 	for i := 0; i < len(r.valueTypes); i++ {
@@ -50,7 +51,7 @@ func (r *CopyIn) Append(rows *sql.Rows) (err error) {
 	return nil
 }
 
-//Closes any prepared statements
+// Closes any prepared statements
 func (r *CopyIn) Close() (err error) {
 	if err = r.stmt.Close(); err != nil {
 		return errors.Trace(err)
@@ -63,7 +64,7 @@ func (r *CopyIn) Close() (err error) {
 	return nil
 }
 
-func (r *CopyIn) Flush() (totalRowCount int, err error) {
+func (r *CopyIn) Flush(ctx context.Context) (totalRowCount int, err error) {
 	if _, err = r.stmt.Exec(); err != nil {
 		return 0, errors.Trace(err)
 	}
@@ -71,10 +72,10 @@ func (r *CopyIn) Flush() (totalRowCount int, err error) {
 	return r.totalRowCount, nil
 }
 
-func (r *CopyIn) findColumnTypes(schema string, tableName string, columns []string) (err error) {
+func (r *CopyIn) findColumnTypes(ctx context.Context, schema string, tableName string, columns []string) (err error) {
 	sql := "SELECT column_name AS name, data_type AS type FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2"
 
-	rows, err := r.db.Query(sql, schema, tableName)
+	rows, err := r.conn.QueryContext(ctx, sql, schema, tableName)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -98,9 +99,9 @@ func (r *CopyIn) findColumnTypes(schema string, tableName string, columns []stri
 	return errors.Trace(rows.Err())
 }
 
-func NewCopyIn(db *sql.DB, columns []string, schema string, tableName string) (r *CopyIn, err error) {
+func NewCopyIn(ctx context.Context, conn *sql.Conn, columns []string, schema string, tableName string) (r *CopyIn, err error) {
 	r = &CopyIn{
-		db: db}
+		conn: conn}
 
 	colCount := len(columns)
 
@@ -112,11 +113,11 @@ func NewCopyIn(db *sql.DB, columns []string, schema string, tableName string) (r
 		r.valuePtrs[i] = &r.values[i]
 	}
 
-	if r.tx, err = r.db.Begin(); err != nil {
+	if r.tx, err = r.conn.BeginTx(ctx, nil); err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	if err = r.findColumnTypes(schema, tableName, columns); err != nil {
+	if err = r.findColumnTypes(ctx, schema, tableName, columns); err != nil {
 		return nil, errors.Trace(err)
 	}
 

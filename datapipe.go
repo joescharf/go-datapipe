@@ -1,6 +1,7 @@
 package godatapipe
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -15,13 +16,14 @@ import (
 )
 
 type Insert interface {
-	Append(rows *sql.Rows) (err error)
-	Flush() (totalRowCount int, err error)
+	Append(ctx context.Context, rows *sql.Rows) (err error)
+	Flush(ctx context.Context) (totalRowCount int, err error)
 	Close() (err error)
 }
 
-func Run(cfg *Config) (rowCount int, err error) {
+func Run(ctx context.Context, cfg *Config) (rowCount int, err error) {
 	var srcDb, dstDb *sql.DB
+	var srcConn, dstConn *sql.Conn
 	srcDBurl, err := dburl.Parse(cfg.SrcDbUri)
 
 	dstDBurl, err := dburl.Parse(cfg.DstDbUri)
@@ -31,35 +33,44 @@ func Run(cfg *Config) (rowCount int, err error) {
 		if srcDb, err = sql.Open(srcDBurl.Driver, srcDBurl.DSN); err != nil {
 			return 0, errors.Trace(err)
 		}
-	} else {
-		srcDb = cfg.SrcConn
-	}
+		// Only close the connection if we opened it
+		defer srcDb.Close()
+		// Get the a DB conn.
+		srcConn, err = srcDb.Conn(ctx)
 
-	defer srcDb.Close()
+	} else {
+		srcConn = cfg.SrcConn
+	}
 
 	if cfg.DstConn == nil {
 		if dstDb, err = sql.Open(dstDBurl.Driver, dstDBurl.DSN); err != nil {
 			return 0, errors.Trace(err)
 		}
+		// Only close the connection if we opened it
+		defer dstDb.Close()
+		// Get a DB conn
+		dstConn, err = dstDb.Conn(ctx)
+		if err != nil {
+			return 0, errors.Trace(err)
+		}
 	} else {
-		dstDb = cfg.DstConn
+		dstConn = cfg.DstConn
 	}
 
-	defer dstDb.Close()
-
-	if err = clearTable(dstDb, cfg); err != nil {
+	if err = clearTable(ctx, dstConn, cfg); err != nil {
 		return 0, errors.Trace(err)
 	}
 
-	if rowCount, err = copyTable(srcDb, dstDb, cfg); err != nil {
+	if rowCount, err = copyTable(ctx, srcConn, dstConn, cfg); err != nil {
 		return 0, errors.Trace(err)
 	}
 
 	return rowCount, nil
 }
 
-func clearTable(dstDb *sql.DB, cfg *Config) (err error) {
-	if _, err = dstDb.Exec("TRUNCATE TABLE " + fqSchemaTable(cfg.DstSchema, cfg.DstTable)); err != nil {
+func clearTable(ctx context.Context, dstConn *sql.Conn, cfg *Config) (err error) {
+	q := fmt.Sprintf("TRUNCATE TABLE %s", fqSchemaTable(cfg.DstSchema, cfg.DstTable))
+	if _, err = dstConn.ExecContext(ctx, q); err != nil {
 		return errors.Trace(err)
 	}
 	return nil
@@ -69,19 +80,19 @@ func clearTable(dstDb *sql.DB, cfg *Config) (err error) {
 // taking into account a null schema
 func fqSchemaTable(schema string, table string) string {
 	if schema == "" {
-		return table
+		return fmt.Sprintf("`%s`", table)
 	}
-	return schema + "." + table
+	return fmt.Sprintf("`%s`.`%s`", schema, table)
 }
 
-func copyTable(srcDb *sql.DB, dstDb *sql.DB, cfg *Config) (rowCount int, err error) {
+func copyTable(ctx context.Context, srcConn *sql.Conn, dstConn *sql.Conn, cfg *Config) (rowCount int, err error) {
 	var ir Insert
 	var rows *sql.Rows
 	var columns []string
 
 	readStart := time.Now()
 
-	if rows, err = srcDb.Query(cfg.SrcSelectSql); err != nil {
+	if rows, err = srcConn.QueryContext(ctx, cfg.SrcSelectSql); err != nil {
 		return 0, errors.Trace(err)
 	}
 
@@ -96,19 +107,19 @@ func copyTable(srcDb *sql.DB, dstDb *sql.DB, cfg *Config) (rowCount int, err err
 
 	switch cfg.DstDbDriver {
 	case "postgres":
-		if ir, err = bulk.NewCopyIn(dstDb, columns, cfg.DstSchema, cfg.DstTable); err != nil {
+		if ir, err = bulk.NewCopyIn(ctx, dstConn, columns, cfg.DstSchema, cfg.DstTable); err != nil {
 			return 0, errors.Trace(err)
 		}
 	default:
 		if ir, err = bulk.NewBulk(
-			dstDb, columns,
+			ctx, dstConn, columns,
 			cfg.DstSchema, cfg.DstTable,
 			cfg.MaxRowBufSz, cfg.MaxRowTxCommit); err != nil {
 			return 0, errors.Trace(err)
 		}
 	}
 
-	rowCount, err = copyBulkRows(dstDb, rows, ir, cfg)
+	rowCount, err = copyBulkRows(ctx, dstConn, rows, ir, cfg)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
@@ -127,14 +138,14 @@ func copyTable(srcDb *sql.DB, dstDb *sql.DB, cfg *Config) (rowCount int, err err
 	return rowCount, errors.Trace(rows.Err())
 }
 
-func copyBulkRows(dstDb *sql.DB, rows *sql.Rows, ir Insert, cfg *Config) (rowCount int, err error) {
+func copyBulkRows(ctx context.Context, dstDb *sql.Conn, rows *sql.Rows, ir Insert, cfg *Config) (rowCount int, err error) {
 	var totalRowCount int
 	const dotLimit = 1000
 
 	i := 1
 
 	for rows.Next() {
-		if err = ir.Append(rows); err != nil {
+		if err = ir.Append(ctx, rows); err != nil {
 			return 0, errors.Trace(err)
 		}
 
@@ -146,7 +157,7 @@ func copyBulkRows(dstDb *sql.DB, rows *sql.Rows, ir Insert, cfg *Config) (rowCou
 		i++
 	}
 
-	if totalRowCount, err = ir.Flush(); err != nil {
+	if totalRowCount, err = ir.Flush(ctx); err != nil {
 		return 0, errors.Trace(err)
 	}
 

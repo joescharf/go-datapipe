@@ -12,14 +12,14 @@ type Config struct {
 	MaxRowBufSz    int //Maximum number of rows to buffer at a time
 	MaxRowTxCommit int //Maximum number of rows to process before committing the database transaction
 
-	SrcConn      *sql.DB // Source database connection overrides Driver/Uri
-	SrcDbDriver  string  //Source database driver name
-	SrcDbUri     string  //Source database driver URI
-	SrcSelectSql string  //Source database select SQL statement
+	SrcConn      *sql.Conn // Source database connection overrides Driver/Uri
+	SrcDbDriver  string    //Source database driver name
+	SrcDbUri     string    //Source database driver URI
+	SrcSelectSql string    //Source database select SQL statement
 
-	DstConn     *sql.DB // Destination database connection overrides Driver/Uri
-	DstDbDriver string  //Destination database driver name
-	DstDbUri    string  //Destination database driver URI
+	DstConn     *sql.Conn // Destination database connection overrides Driver/Uri
+	DstDbDriver string    //Destination database driver name
+	DstDbUri    string    //Destination database driver URI
 	DstSchema   string
 	DstTable    string //Destination database table name
 
