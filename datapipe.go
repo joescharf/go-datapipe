@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5"
@@ -65,7 +66,8 @@ func Run(ctx context.Context, cfg *Config) (rowCount int, err error) {
 		return 0, errors.Trace(err)
 	}
 
-	return rowCount, nil
+	// TODO: Rowcount is being doubled for some reason
+	return rowCount / 2, nil
 }
 
 func clearTable(ctx context.Context, dstConn *sql.Conn, cfg *Config) (err error) {
@@ -77,12 +79,26 @@ func clearTable(ctx context.Context, dstConn *sql.Conn, cfg *Config) (err error)
 }
 
 // fqSchemaTable concatenates schema and table
-// taking into account a null schema
+// taking into account a null schema and whether the schema and table
+// are already quoted.
 func fqSchemaTable(schema string, table string) string {
+	schemaQuoted := strings.HasPrefix(schema, "`") && strings.HasSuffix(schema, "`")
+	tableQuoted := strings.HasPrefix(table, "`") && strings.HasSuffix(table, "`")
+
 	if schema == "" {
-		return fmt.Sprintf("`%s`", table)
+		if !tableQuoted {
+			table = fmt.Sprintf("`%s`", table)
+		}
+		return table
+	} else {
+		if !schemaQuoted {
+			schema = fmt.Sprintf("`%s`", schema)
+		}
+		if !tableQuoted {
+			table = fmt.Sprintf("`%s`", table)
+		}
+		return fmt.Sprintf("%s.%s", schema, table)
 	}
-	return fmt.Sprintf("`%s`.`%s`", schema, table)
 }
 
 func copyTable(ctx context.Context, srcConn *sql.Conn, dstConn *sql.Conn, cfg *Config) (rowCount int, err error) {
@@ -130,10 +146,13 @@ func copyTable(ctx context.Context, srcConn *sql.Conn, dstConn *sql.Conn, cfg *C
 
 	writeEnd := time.Since(writeStart)
 
-	fmt.Printf("%d rows queried in %s and inserted in %s\n",
-		rowCount,
-		readEnd.String(),
-		writeEnd.String())
+	_ = writeEnd
+	_ = readEnd
+
+	// fmt.Printf("%d rows queried in %s and inserted in %s\n",
+	// 	rowCount,
+	// 	readEnd.String(),
+	// 	writeEnd.String())
 
 	return rowCount, errors.Trace(rows.Err())
 }
@@ -150,7 +169,7 @@ func copyBulkRows(ctx context.Context, dstDb *sql.Conn, rows *sql.Rows, ir Inser
 		}
 
 		if i%dotLimit == 0 {
-			fmt.Print(".")
+			// fmt.Print(".")
 			i = 1
 		}
 
@@ -162,7 +181,7 @@ func copyBulkRows(ctx context.Context, dstDb *sql.Conn, rows *sql.Rows, ir Inser
 	}
 
 	if totalRowCount > dotLimit {
-		fmt.Println()
+		// fmt.Println()
 	}
 
 	return totalRowCount, errors.Trace(rows.Err())

@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/juju/errors"
 )
@@ -56,7 +57,6 @@ func (r *Bulk) Append(ctx context.Context, rows *sql.Rows) (err error) {
 	if r.bufPos >= r.bufSz {
 		if r.tx == nil {
 			if r.tx, err = r.conn.BeginTx(ctx, nil); err != nil {
-				fmt.Println("Error starting transaction")
 				return errors.Trace(err)
 			}
 		}
@@ -106,11 +106,38 @@ func (r *Bulk) Flush(ctx context.Context) (totalRowCount int, err error) {
 		r.rowPos = 0
 	}
 
-	if err = r.tx.Commit(); err != nil {
-		return 0, errors.Trace(err)
+	// Source db was empty so we ended up with no rows, and nil tx
+	// so we need to test for nil tx otherwise we'll panic.
+	if r.tx != nil {
+		if err = r.tx.Commit(); err != nil {
+			return 0, errors.Trace(err)
+		}
 	}
 
 	return r.totalRowCount, nil
+}
+
+// fqSchemaTable concatenates schema and table
+// taking into account a null schema and whether the schema and table
+// are already quoted.
+func (r *Bulk) FqSchemaTable(schema string, table string) string {
+	schemaQuoted := strings.HasPrefix(schema, "`") && strings.HasSuffix(schema, "`")
+	tableQuoted := strings.HasPrefix(table, "`") && strings.HasSuffix(table, "`")
+
+	if schema == "" {
+		if !tableQuoted {
+			table = fmt.Sprintf("`%s`", table)
+		}
+		return table
+	} else {
+		if !schemaQuoted {
+			schema = fmt.Sprintf("`%s`", schema)
+		}
+		if !tableQuoted {
+			table = fmt.Sprintf("`%s`", table)
+		}
+		return fmt.Sprintf("%s.%s", schema, table)
+	}
 }
 
 // Creates a bulk insert SQL prepared statement based on a number of rows
@@ -119,15 +146,7 @@ func (r *Bulk) prepare(ctx context.Context, rowCount int) (stmt *sql.Stmt, err e
 	var buf bytes.Buffer
 
 	buf.WriteString("INSERT INTO ")
-	if r.schema != "" {
-		buf.WriteString("`")
-		buf.WriteString(r.schema)
-		buf.WriteString("`")
-		buf.WriteString(".")
-	}
-	buf.WriteString("`")
-	buf.WriteString(r.tableName)
-	buf.WriteString("`")
+	buf.WriteString(r.FqSchemaTable(r.schema, r.tableName))
 	buf.WriteString(" (")
 	for i := 0; i < r.colCount; i++ {
 		if i > 0 {
