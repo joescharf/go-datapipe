@@ -10,7 +10,8 @@ import (
 
 	_ "github.com/jackc/pgx/v5"
 	"github.com/joescharf/go-datapipe/bulk"
-	_ "github.com/microsoft/go-mssqldb"
+	// _ "github.com/microsoft/go-mssqldb"
+	_ "github.com/denisenkom/go-mssqldb"
 	"github.com/xo/dburl"
 
 	"github.com/juju/errors"
